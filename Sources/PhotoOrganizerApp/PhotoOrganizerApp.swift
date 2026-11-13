@@ -10,7 +10,7 @@ struct PhotoOrganizerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(viewModel: viewModel)
-                .frame(minWidth: 960, minHeight: 680)
+                .frame(minWidth: 960, minHeight: 700)
                 .onAppear {
                     if let icon = AppArtworkLoader.loadImage(named: "AppIcon.icns")
                         ?? AppArtworkLoader.loadImage(named: "HeroSilhouette1.png") {
@@ -77,9 +77,21 @@ private struct WizardHeaderView: View {
     var body: some View {
         HStack {
             HStack(spacing: 12) {
-                AnimatedSilhouetteHeroView(cornerRadius: 10, showSparkles: false)
-                    .frame(width: 44, height: 44)
-                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.accentColor, Color.accentColor.opacity(0.75)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    Image(systemName: "photo.stack.fill")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 40, height: 40)
+                .shadow(color: .black.opacity(0.1), radius: 2, y: 1)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text("PhotoOrganizer")
@@ -158,7 +170,7 @@ private struct Step1FolderDropView: View {
     @State private var isDropTargeted = false
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             if viewModel.isAnalyzing {
                 AnalysisProgressCard(
                     progress: viewModel.progress,
@@ -168,64 +180,70 @@ private struct Step1FolderDropView: View {
                 dropZone
                 folderSelectionCards
                 optionsCard
-
-                HStack {
-                    if viewModel.canUndoAtDestination {
-                        Button("Undo Previous Sort at Destination") {
-                            viewModel.undoLastSort()
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Spacer()
-
-                    Button {
-                        viewModel.startAnalysis()
-                    } label: {
-                        Label("Analyze & Preview", systemImage: "sparkles")
-                            .frame(minWidth: 160)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(!viewModel.canAnalyze)
-                }
+                Spacer(minLength: 0)
+                footerBar
             }
         }
         .padding(24)
     }
 
     private var dropZone: some View {
-        VStack(spacing: 12) {
+        HStack(spacing: 24) {
             AnimatedSilhouetteHeroView(cornerRadius: 12, showSparkles: true)
-                .frame(width: 156, height: 104)
+                .frame(width: 192, height: 128)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(isDropTargeted ? Color.accentColor : Color.white.opacity(0.45), lineWidth: 1.5)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(isDropTargeted ? Color.accentColor : Color.white.opacity(0.6), lineWidth: 1.5)
                 )
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
 
-            Text("Drop a Messy Photo & Video Folder Here")
-                .font(.headline)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Drop a Messy Photo & Video Folder Here")
+                    .font(.title3.weight(.semibold))
 
-            Text("Supports .HEIC, .JPG, .PNG, .RAW, .MOV, .MP4 & Apple Live Photos — 100% offline on-device")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text("100% offline on-device sorting by date, venue, face clusters, dining sessions, and image quality.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
-            Button("Browse Source Folder...") {
-                viewModel.pickSourceFolder()
+                HStack(spacing: 6) {
+                    ForEach([".HEIC", ".JPG", ".RAW", "Live Photos", ".MOV"], id: \.self) { format in
+                        Text(format)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.secondary.opacity(0.12))
+                            .foregroundStyle(.secondary)
+                            .clipShape(Capsule())
+                    }
+                }
+
+                Button {
+                    viewModel.pickSourceFolder()
+                } label: {
+                    Label("Browse Source Folder...", systemImage: "folder.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .padding(.top, 2)
             }
-            .buttonStyle(.bordered)
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, minHeight: 190)
+        .padding(20)
+        .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(
-                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
+                    isDropTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
                     style: StrokeStyle(lineWidth: 2, dash: [8, 6])
                 )
                 .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(isDropTargeted ? Color.accentColor.opacity(0.08) : Color(nsColor: .controlBackgroundColor))
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(
+                            isDropTargeted
+                                ? Color.accentColor.opacity(0.08)
+                                : Color(nsColor: .controlBackgroundColor).opacity(0.75)
+                        )
                 )
         )
         .onDrop(of: [UTType.fileURL], isTargeted: $isDropTargeted) { providers in
@@ -234,16 +252,23 @@ private struct Step1FolderDropView: View {
     }
 
     private var folderSelectionCards: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             FolderPathBox(
                 title: "Source Folder",
+                systemImage: "folder.fill",
                 url: viewModel.sourceURL,
                 placeholder: "No folder selected",
                 actionTitle: "Choose...",
                 action: viewModel.pickSourceFolder
             )
+
+            Image(systemName: "arrow.right.circle.fill")
+                .font(.title3)
+                .foregroundStyle(viewModel.sourceURL == nil ? Color.secondary.opacity(0.45) : Color.accentColor)
+
             FolderPathBox(
                 title: "Organized Output Folder",
+                systemImage: "folder.badge.gearshape",
                 url: viewModel.destinationURL,
                 placeholder: "Auto-created beside source",
                 actionTitle: "Change...",
@@ -253,43 +278,152 @@ private struct Step1FolderDropView: View {
     }
 
     private var optionsCard: some View {
-        GroupBox("Organization Options") {
-            VStack(alignment: .leading, spacing: 12) {
-                Picker("File Handling", selection: $viewModel.options.executionMode) {
-                    ForEach(ExecutionMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
+        HStack(alignment: .top, spacing: 16) {
+            GroupBox("Workflow & Location") {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("File Handling")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("File Handling", selection: $viewModel.options.executionMode) {
+                            ForEach(ExecutionMode.allCases) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Fallback Venue / Location (Optional, used when photos lack GPS metadata)")
+                        Text(
+                            viewModel.options.executionMode == .safeCopyAPFSClone
+                                ? "Creates zero-byte APFS clones; original files stay untouched."
+                                : "Moves originals into organized folders with full 1-click undo."
+                        )
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    TextField(
-                        "e.g. National University of Singapore",
-                        text: $viewModel.options.fallbackLocationQuery
-                    )
-                    .textFieldStyle(.roundedBorder)
-                }
+                    }
 
-                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
-                    GridRow {
-                        Toggle("Cross-Link Multi-Category & Group Photos (0 bytes on APFS)", isOn: $viewModel.options.enableMultiCategoryCrossLinks)
-                        Toggle("Isolate Exact Duplicates into _Duplicates/", isOn: $viewModel.options.deduplicateExactMatches)
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Fallback Venue / Location (Optional)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Image(systemName: "mappin.and.ellipse")
+                                .foregroundStyle(.secondary)
+                            TextField(
+                                "e.g. National University of Singapore",
+                                text: $viewModel.options.fallbackLocationQuery
+                            )
+                            .textFieldStyle(.plain)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
+                        )
+                        Text("Applied to non-GPS camera photos lacking nearby geotagged shots.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
-                    GridRow {
-                        Toggle("Separate Blurry Shots into _Blurry & Outtakes/", isOn: $viewModel.options.separateBlurryPhotos)
-                        Toggle("Separate Burst Extras into _Burst Extras/", isOn: $viewModel.options.separateBurstExtras)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity)
+
+            GroupBox("Smart Curation & Output") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                        GridRow {
+                            OptionToggleRow(
+                                title: "Cross-Link Groups",
+                                badge: "0 B APFS",
+                                isOn: $viewModel.options.enableMultiCategoryCrossLinks
+                            )
+                            OptionToggleRow(
+                                title: "Isolate Duplicates",
+                                badge: "_Duplicates/",
+                                isOn: $viewModel.options.deduplicateExactMatches
+                            )
+                        }
+                        GridRow {
+                            OptionToggleRow(
+                                title: "Separate Blurry",
+                                badge: "_Blurry & Outtakes/",
+                                isOn: $viewModel.options.separateBlurryPhotos
+                            )
+                            OptionToggleRow(
+                                title: "Separate Bursts",
+                                badge: "_Burst Extras/",
+                                isOn: $viewModel.options.separateBurstExtras
+                            )
+                        }
                     }
-                    GridRow {
-                        Toggle("Generate Interactive HTML Map & Report (index.html)", isOn: $viewModel.options.generateHTMLReport)
-                        Spacer()
-                    }
+
+                    Divider()
+
+                    OptionToggleRow(
+                        title: "Generate Interactive Map & Analytics Dashboard",
+                        badge: "index.html",
+                        isOn: $viewModel.options.generateHTMLReport
+                    )
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var footerBar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: viewModel.canAnalyze ? "checkmark.circle.fill" : "info.circle")
+                    .foregroundStyle(viewModel.canAnalyze ? Color.green : Color.secondary)
+                if let sourceURL = viewModel.sourceURL {
+                    Text("Ready to analyze \(sourceURL.lastPathComponent)")
+                        .font(.callout)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("Select or drop a source folder to begin")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             }
-            .padding(8)
+
+            Spacer()
+
+            if viewModel.canUndoAtDestination {
+                Button("Undo Previous Sort") {
+                    viewModel.undoLastSort()
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button {
+                viewModel.startAnalysis()
+            } label: {
+                Label("Analyze & Preview", systemImage: "sparkles")
+                    .frame(minWidth: 160)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!viewModel.canAnalyze)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
+        )
     }
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
@@ -313,16 +447,45 @@ private struct Step1FolderDropView: View {
     }
 }
 
+private struct OptionToggleRow: View {
+    let title: String
+    let badge: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout)
+                Text(badge)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1.5)
+                    .background(Color.secondary.opacity(0.12))
+                    .foregroundStyle(.secondary)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            }
+        }
+        .toggleStyle(.checkbox)
+    }
+}
+
 private struct FolderPathBox: View {
     let title: String
+    let systemImage: String
     let url: URL?
     let placeholder: String
     let actionTitle: String
     let action: () -> Void
 
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(url == nil ? Color.secondary : Color.accentColor)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
@@ -332,13 +495,19 @@ private struct FolderPathBox: View {
                     .truncationMode(.middle)
                     .foregroundStyle(url == nil ? .tertiary : .primary)
             }
-            Spacer()
+
+            Spacer(minLength: 8)
             Button(actionTitle, action: action)
+                .buttonStyle(.bordered)
         }
         .padding(12)
         .frame(maxWidth: .infinity)
         .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(url == nil ? Color.secondary.opacity(0.16) : Color.accentColor.opacity(0.4), lineWidth: 1)
+        )
     }
 }
 
