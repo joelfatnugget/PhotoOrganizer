@@ -1,20 +1,22 @@
 import Foundation
 import Vision
 
-/// Density-based (DBSCAN) identity clusterer for foreground faces.
+/// Density-based (DBSCAN) identity clusterer with same-photo cannot-link and centroid anti-chaining guards.
 public struct FaceDBSCANClusterer: Sendable {
-    /// Maximum feature-print distance (or cosine distance when using raw float vectors) for same-person neighbors.
     public let featurePrintEpsilon: Float
     public let cosineEpsilon: Float
+    public let centroidMaxDistance: Float
     public let minPoints: Int
 
     public init(
         featurePrintEpsilon: Float = 0.95,
-        cosineEpsilon: Float = 0.35,
+        cosineEpsilon: Float = 0.24,
+        centroidMaxDistance: Float = 0.26,
         minPoints: Int = 2
     ) {
         self.featurePrintEpsilon = featurePrintEpsilon
         self.cosineEpsilon = cosineEpsilon
+        self.centroidMaxDistance = centroidMaxDistance
         self.minPoints = minPoints
     }
 
@@ -34,7 +36,7 @@ public struct FaceDBSCANClusterer: Sendable {
             for faceIdx in items[itemIdx].faces.indices {
                 let face = items[itemIdx].faces[faceIdx]
                 let fp: VNFeaturePrintObservation?
-                if let data = face.featurePrintData {
+                if face.embedding == nil, let data = face.featurePrintData {
                     fp = try? NSKeyedUnarchiver.unarchivedObject(ofClass: VNFeaturePrintObservation.self, from: data)
                 } else {
                     fp = nil
@@ -66,14 +68,16 @@ public struct FaceDBSCANClusterer: Sendable {
                     continue
                 }
                 let b = refs[j]
-                if let fpA = a.featurePrint, let fpB = b.featurePrint {
-                    var distance: Float = .infinity
-                    if (try? fpA.computeDistance(&distance, to: fpB)) != nil, distance <= featurePrintEpsilon {
+                // Cannot-link constraint: two faces in the same photo cannot be the same person.
+                guard a.itemID != b.itemID else { continue }
+
+                if let embA = a.face.embedding, let embB = b.face.embedding, !embA.isEmpty, embA.count == embB.count {
+                    if Self.cosineDistance(embA, embB) <= cosineEpsilon {
                         result.append(j)
                     }
-                } else if let embA = a.face.embedding, let embB = b.face.embedding {
-                    let dist = Self.cosineDistance(embA, embB)
-                    if dist <= cosineEpsilon {
+                } else if let fpA = a.featurePrint, let fpB = b.featurePrint {
+                    var distance: Float = .infinity
+                    if (try? fpA.computeDistance(&distance, to: fpB)) != nil, distance <= featurePrintEpsilon {
                         result.append(j)
                     }
                 }
@@ -92,65 +96,115 @@ public struct FaceDBSCANClusterer: Sendable {
             nextClusterID += 1
             labels[i] = clusterID
 
+            var usedItemIDs: Set<UUID> = [refs[i].itemID]
+            var centroidSum: [Float]? = refs[i].face.embedding
+            var centroid = Self.l2Normalize(centroidSum)
+
             var queue = seedNeighbors.filter { $0 != i }
             var head = 0
             while head < queue.count {
                 let current = queue[head]
                 head += 1
 
-                if labels[current] == -2 {
-                    labels[current] = clusterID
-                }
-                if labels[current] != -1 {
-                    continue
+                guard labels[current] == -1 || labels[current] == -2 else { continue }
+                guard !usedItemIDs.contains(refs[current].itemID) else { continue }
+
+                if let curEmb = refs[current].face.embedding, !centroid.isEmpty, curEmb.count == centroid.count {
+                    if Self.cosineDistance(centroid, curEmb) > centroidMaxDistance {
+                        continue
+                    }
                 }
 
+                let wasUnvisited = (labels[current] == -1)
                 labels[current] = clusterID
-                let currentNeighbors = neighbors(of: current)
-                if currentNeighbors.count >= minPoints {
-                    for n in currentNeighbors where labels[n] == -1 || labels[n] == -2 {
-                        if !queue.contains(n) {
-                            queue.append(n)
+                usedItemIDs.insert(refs[current].itemID)
+
+                if let curEmb = refs[current].face.embedding {
+                    if var sum = centroidSum, sum.count == curEmb.count {
+                        for k in 0..<sum.count { sum[k] += curEmb[k] }
+                        centroidSum = sum
+                        centroid = Self.l2Normalize(sum)
+                    } else {
+                        centroidSum = curEmb
+                        centroid = Self.l2Normalize(curEmb)
+                    }
+                }
+
+                if wasUnvisited {
+                    let currentNeighbors = neighbors(of: current)
+                    if currentNeighbors.count >= minPoints {
+                        for n in currentNeighbors where labels[n] == -1 || labels[n] == -2 {
+                            if !usedItemIDs.contains(refs[n].itemID) && !queue.contains(n) {
+                                queue.append(n)
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Write cluster assignments back to items and collect cluster summaries.
-        var clusterPhotoIDs: [Int: [UUID]] = [:]
-        var clusterThumbnails: [Int: Data] = [:]
-
+        // Group refs by raw cluster ID and sort clusters by photo count descending (tie-break by raw ID).
+        var rawClusterPhotoIDs: [Int: [UUID]] = [:]
+        var rawClusterBestThumb: [Int: (area: Double, data: Data)] = [:]
         for (refIdx, ref) in refs.enumerated() {
             let label = labels[refIdx]
-            guard label >= 0 else {
+            guard label >= 0 else { continue }
+            var ids = rawClusterPhotoIDs[label, default: []]
+            if !ids.contains(ref.itemID) {
+                ids.append(ref.itemID)
+                rawClusterPhotoIDs[label] = ids
+            }
+            if let thumb = ref.face.thumbnailJPEGData {
+                let existingArea = rawClusterBestThumb[label]?.area ?? -1
+                if ref.face.areaRatio > existingArea {
+                    rawClusterBestThumb[label] = (ref.face.areaRatio, thumb)
+                }
+            }
+        }
+
+        let sortedRawIDs = rawClusterPhotoIDs.keys
+            .filter { (rawClusterPhotoIDs[$0]?.count ?? 0) >= minPoints }
+            .sorted { lhs, rhs in
+                let lCount = rawClusterPhotoIDs[lhs]?.count ?? 0
+                let rCount = rawClusterPhotoIDs[rhs]?.count ?? 0
+                if lCount != rCount { return lCount > rCount }
+                return lhs < rhs
+            }
+
+        var rawToSortedID: [Int: Int] = [:]
+        for (newID, oldID) in sortedRawIDs.enumerated() {
+            rawToSortedID[oldID] = newID
+        }
+
+        for (refIdx, ref) in refs.enumerated() {
+            let rawLabel = labels[refIdx]
+            guard rawLabel >= 0, let mappedID = rawToSortedID[rawLabel] else {
                 items[ref.itemIndex].faces[ref.faceIndex].clusterId = nil
                 continue
             }
 
-            items[ref.itemIndex].faces[ref.faceIndex].clusterId = label
-            if !items[ref.itemIndex].assignedFaceClusterIDs.contains(label) {
-                items[ref.itemIndex].assignedFaceClusterIDs.append(label)
-            }
-            var ids = clusterPhotoIDs[label, default: []]
-            if !ids.contains(ref.itemID) {
-                ids.append(ref.itemID)
-                clusterPhotoIDs[label] = ids
-            }
-            if clusterThumbnails[label] == nil, let thumb = ref.face.thumbnailJPEGData {
-                clusterThumbnails[label] = thumb
+            items[ref.itemIndex].faces[ref.faceIndex].clusterId = mappedID
+            if !items[ref.itemIndex].assignedFaceClusterIDs.contains(mappedID) {
+                items[ref.itemIndex].assignedFaceClusterIDs.append(mappedID)
             }
         }
 
-        return (0..<nextClusterID).compactMap { cid in
-            guard let photoIDs = clusterPhotoIDs[cid], !photoIDs.isEmpty else { return nil }
-            return FaceCluster(
-                id: cid,
+        return sortedRawIDs.enumerated().map { newID, oldID in
+            FaceCluster(
+                id: newID,
                 customName: "",
-                sampleThumbnailJPEG: clusterThumbnails[cid],
-                photoIDs: photoIDs
+                sampleThumbnailJPEG: rawClusterBestThumb[oldID]?.data,
+                photoIDs: rawClusterPhotoIDs[oldID] ?? []
             )
         }
+    }
+
+    private static func l2Normalize(_ vector: [Float]?) -> [Float] {
+        guard let vector, !vector.isEmpty else { return [] }
+        let normSq = vector.reduce(Float(0)) { $0 + $1 * $1 }
+        let norm = sqrt(normSq)
+        guard norm > 1e-8 else { return [] }
+        return vector.map { $0 / norm }
     }
 
     /// Computes cosine distance `1 - cos(a, b)` in `[0, 2]`.

@@ -47,6 +47,15 @@ cp "$BIN_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 chmod +x "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 printf "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 
+if [[ -d "$ROOT_DIR/Sources/PhotoOrganizerCore/Resources/MobileFaceNet.mlmodelc" ]]; then
+  cp -R "$ROOT_DIR/Sources/PhotoOrganizerCore/Resources/MobileFaceNet.mlmodelc" "$APP_BUNDLE/Contents/Resources/"
+fi
+
+BIN_DIR="$(dirname "$BIN_PATH")"
+if [[ -d "$BIN_DIR/PhotoOrganizer_PhotoOrganizerCore.bundle" ]]; then
+  cp -R "$BIN_DIR/PhotoOrganizer_PhotoOrganizerCore.bundle" "$APP_BUNDLE/Contents/Resources/"
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

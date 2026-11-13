@@ -383,6 +383,55 @@ final class PhotoOrganizerCoreTests: XCTestCase {
         XCTAssertTrue(paths.contains("2025/04 - April/Unknown Location/People/Other People/IMG_1005.JPG"))
     }
 
+    func testSamePhotoCannotLinkAndMultiFaceGroupRouting() {
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let sharedVec: [Float] = [1, 0, 0, 0]
+
+        var items = [
+            // Single photo with two faces (same-photo cannot-link must prevent both faces joining the same cluster)
+            AnalyzedMediaItem(
+                sourceURL: URL(fileURLWithPath: "/tmp/duo.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "d1",
+                captureDate: makeDate(year: 2025, month: 7, day: 1, hour: 12, minute: 0, timeZone: tz),
+                dateSource: .exif,
+                faces: [
+                    DetectedFace(boundingBox: CGRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2), areaRatio: 0.04, embedding: sharedVec),
+                    DetectedFace(boundingBox: CGRect(x: 0.5, y: 0.1, width: 0.2, height: 0.2), areaRatio: 0.04, embedding: sharedVec)
+                ]
+            ),
+            AnalyzedMediaItem(
+                sourceURL: URL(fileURLWithPath: "/tmp/solo.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "d2",
+                captureDate: makeDate(year: 2025, month: 7, day: 1, hour: 12, minute: 5, timeZone: tz),
+                dateSource: .exif,
+                faces: [
+                    DetectedFace(boundingBox: CGRect(x: 0.2, y: 0.2, width: 0.2, height: 0.2), areaRatio: 0.04, embedding: sharedVec)
+                ]
+            )
+        ]
+
+        let clusterer = FaceDBSCANClusterer()
+        let clusters = clusterer.cluster(items: &items)
+
+        // Only 1 cluster can be formed (face 0 of duo + solo), never both faces of duo.jpg.
+        XCTAssertEqual(clusters.count, 1)
+        XCTAssertEqual(items[0].assignedFaceClusterIDs.count, 1)
+
+        // Even though duo.jpg only has 1 assigned cluster ID, item.faces.count == 2 must route it to Group Photos.
+        let planner = OrganizationPlanner()
+        let plan = planner.buildPlan(
+            sourceRootURL: URL(fileURLWithPath: "/tmp"),
+            destinationRootURL: URL(fileURLWithPath: "/tmp/out"),
+            items: items,
+            faceClusters: clusters,
+            diningSessions: [],
+            options: OrganizationOptions(timeZone: tz)
+        )
+        let paths = plan.operations.map(\.destinationRelativePath)
+        XCTAssertTrue(paths.contains("2025/07 - July/Unknown Location/People/Group Photos/duo.jpg"))
+        XCTAssertTrue(paths.contains("2025/07 - July/Unknown Location/People/Person 1/solo.jpg"))
+    }
+
     // MARK: - 6. End-to-End Pipeline, APFS COPYFILE_CLONE, Move & 1-Click Undo
 
     func testEndToEndOrganizationAndUndoRoundTrip() async throws {

@@ -122,10 +122,9 @@ public struct OrganizationPlanner: Sendable {
             case .pets:
                 return PhotoCategory.pets.folderName
             case .people:
-                let clusterIDs = item.assignedFaceClusterIDs
-                if clusterIDs.count > 1 {
+                if item.faces.count > 1 {
                     return "\(PhotoCategory.people.folderName)/Group Photos"
-                } else if let cid = clusterIDs.first, let cluster = clusterByID[cid] {
+                } else if let cid = item.assignedFaceClusterIDs.first, let cluster = clusterByID[cid] {
                     return "\(PhotoCategory.people.folderName)/\(sanitizeFolderComponent(cluster.folderName))"
                 } else {
                     return "\(PhotoCategory.people.folderName)/Other People"

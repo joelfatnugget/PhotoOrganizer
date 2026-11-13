@@ -1,41 +1,84 @@
 import Foundation
 import CoreGraphics
+import CoreML
 import ImageIO
 import UniformTypeIdentifiers
 import Vision
 
-/// Foreground face filter, eye-landmark alignment, thumbnail exporter, and Vision FeaturePrint embedder.
+private final class MobileFaceNetHolder: @unchecked Sendable {
+    static let shared = MobileFaceNetHolder()
+    let vnModel: VNCoreMLModel?
+
+    private init() {
+        let candidates: [URL?] = [
+            Bundle.main.url(forResource: "MobileFaceNet", withExtension: "mlmodelc"),
+            Bundle.main.resourceURL?.appendingPathComponent("PhotoOrganizer_PhotoOrganizerCore.bundle/MobileFaceNet.mlmodelc"),
+            Bundle.module.url(forResource: "MobileFaceNet", withExtension: "mlmodelc")
+        ]
+
+        let modelURL = candidates
+            .compactMap { $0 }
+            .first { FileManager.default.fileExists(atPath: $0.path) }
+
+        guard let modelURL else {
+            self.vnModel = nil
+            return
+        }
+
+        let config = MLModelConfiguration()
+        config.computeUnits = .all
+        if let mlModel = try? MLModel(contentsOf: modelURL, configuration: config),
+           let vnModel = try? VNCoreMLModel(for: mlModel) {
+            self.vnModel = vnModel
+        } else {
+            self.vnModel = nil
+        }
+    }
+}
+
+/// Foreground face filter, eye-landmark alignment, thumbnail exporter, and MobileFaceNet CoreML embedder.
 public struct FaceEmbedder: Sendable {
-    /// Minimum face bounding-box area ratio (2.5% of total image area) to exclude background crowds.
-    public static let minimumForegroundAreaRatio: Double = 0.025
+    /// Absolute minimum face bounding-box area ratio (0.25% of frame) so waist-up and group faces are retained.
+    public static let minimumForegroundAreaRatio: Double = 0.0025
+
+    /// Minimum face area relative to the largest face in the same photo (22%) to ignore distant background bystanders.
+    public static let minimumRelativeAreaRatio: Double = 0.22
 
     public init() {}
 
-    /// Extracts foreground faces, aligns them via eye landmarks, encodes 128x128 thumbnails, and computes feature prints.
+    /// Extracts foreground faces, aligns them via eye landmarks, encodes 128x128 thumbnails, and computes embeddings.
     public func extractForegroundFaces(from cgImage: CGImage, observations: [VNFaceObservation]) -> [DetectedFace] {
         let imgWidth = CGFloat(cgImage.width)
         let imgHeight = CGFloat(cgImage.height)
-        guard imgWidth > 0, imgHeight > 0 else { return [] }
+        guard imgWidth > 0, imgHeight > 0, !observations.isEmpty else { return [] }
+
+        let maxArea = observations
+            .map { Double($0.boundingBox.width * $0.boundingBox.height) }
+            .max() ?? 0.0
 
         var detected: [DetectedFace] = []
         for obs in observations {
             let box = obs.boundingBox
             let areaRatio = Double(box.width * box.height)
-            guard areaRatio >= Self.minimumForegroundAreaRatio else { continue }
+            guard areaRatio >= Self.minimumForegroundAreaRatio,
+                  areaRatio >= maxArea * Self.minimumRelativeAreaRatio else {
+                continue
+            }
 
             guard let alignedCrop = cropAndAlignFace(in: cgImage, observation: obs) else {
                 continue
             }
 
             let thumbnailData = encodeJPEG(cgImage: alignedCrop, maxDimension: 128)
-            let featureResult = computeFeaturePrint(for: alignedCrop)
+            let embedding = computeMobileFaceNetEmbedding(for: alignedCrop)
+            let featurePrintData = (embedding == nil) ? computeFallbackFeaturePrint(for: alignedCrop) : nil
 
             detected.append(
                 DetectedFace(
                     boundingBox: box,
                     areaRatio: areaRatio,
-                    featurePrintData: featureResult.archivedData,
-                    embedding: featureResult.floatVector,
+                    featurePrintData: featurePrintData,
+                    embedding: embedding,
                     thumbnailJPEGData: thumbnailData,
                     clusterId: nil
                 )
@@ -44,15 +87,14 @@ public struct FaceEmbedder: Sendable {
         return detected
     }
 
-    /// Crops a padded face region and rotates it to level the eye line when landmarks are present.
+    /// Crops a tightly padded face region (15% padding) and rotates it to level the eye line when landmarks are present.
     private func cropAndAlignFace(in cgImage: CGImage, observation: VNFaceObservation) -> CGImage? {
         let imgW = CGFloat(cgImage.width)
         let imgH = CGFloat(cgImage.height)
         let box = observation.boundingBox
 
-        // Convert Vision bottom-left normalized rect to CGImage top-left pixel rect with 25% padding.
-        let padW = box.width * 0.25
-        let padH = box.height * 0.25
+        let padW = box.width * 0.15
+        let padH = box.height * 0.15
         let normMinX = max(0, box.minX - padW)
         let normMaxX = min(1, box.maxX + padW)
         let normMinY = max(0, box.minY - padH)
@@ -120,31 +162,57 @@ public struct FaceEmbedder: Sendable {
         return context.makeImage()
     }
 
-    private func computeFeaturePrint(for cgImage: CGImage) -> (archivedData: Data?, floatVector: [Float]?) {
+    private func computeMobileFaceNetEmbedding(for cgImage: CGImage) -> [Float]? {
+        guard let vnModel = MobileFaceNetHolder.shared.vnModel else {
+            return nil
+        }
+
+        let request = VNCoreMLRequest(model: vnModel)
+        request.imageCropAndScaleOption = .scaleFill
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return nil
+        }
+
+        guard let results = request.results as? [VNCoreMLFeatureValueObservation],
+              let multiArray = results.first?.featureValue.multiArrayValue else {
+            return nil
+        }
+
+        let count = multiArray.count
+        guard count > 0 else { return nil }
+
+        var vector = [Float](repeating: 0, count: count)
+        var normSq: Float = 0
+        for i in 0..<count {
+            let v = multiArray[i].floatValue
+            vector[i] = v
+            normSq += v * v
+        }
+
+        let norm = sqrt(normSq)
+        guard norm > 1e-8 else { return nil }
+        for i in 0..<count {
+            vector[i] /= norm
+        }
+        return vector
+    }
+
+    private func computeFallbackFeaturePrint(for cgImage: CGImage) -> Data? {
         let request = VNGenerateImageFeaturePrintRequest()
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         do {
             try handler.perform([request])
         } catch {
-            return (nil, nil)
+            return nil
         }
-
         guard let observation = request.results?.first else {
-            return (nil, nil)
+            return nil
         }
-
-        let archived = try? NSKeyedArchiver.archivedData(withRootObject: observation, requiringSecureCoding: true)
-        var floatVector: [Float]?
-        if observation.elementType == .float {
-            let count = observation.elementCount
-            if observation.data.count >= count * MemoryLayout<Float>.size {
-                floatVector = observation.data.withUnsafeBytes { rawBuffer in
-                    let typed = rawBuffer.bindMemory(to: Float.self)
-                    return Array(typed.prefix(count))
-                }
-            }
-        }
-        return (archived, floatVector)
+        return try? NSKeyedArchiver.archivedData(withRootObject: observation, requiringSecureCoding: true)
     }
 
     private func encodeJPEG(cgImage: CGImage, maxDimension: CGFloat) -> Data? {

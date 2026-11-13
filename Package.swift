@@ -19,7 +19,10 @@ let package = Package(
     targets: [
         .target(
             name: "PhotoOrganizerCore",
-            dependencies: []
+            dependencies: [],
+            resources: [
+                .copy("Resources/MobileFaceNet.mlmodelc")
+            ]
         ),
         .executableTarget(
             name: "PhotoOrganizerApp",
