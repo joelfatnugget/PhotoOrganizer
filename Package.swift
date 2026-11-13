@@ -21,7 +21,10 @@ let package = Package(
             name: "PhotoOrganizerCore",
             dependencies: [],
             resources: [
-                .copy("Resources/MobileFaceNet.mlmodelc")
+                .copy("Resources/MobileFaceNet.mlmodelc"),
+                .copy("Resources/HeroSilhouette1.png"),
+                .copy("Resources/HeroSilhouette2.png"),
+                .copy("Resources/AppIcon.icns")
             ]
         ),
         .executableTarget(

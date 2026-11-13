@@ -11,6 +11,12 @@ struct PhotoOrganizerApp: App {
         WindowGroup {
             ContentView(viewModel: viewModel)
                 .frame(minWidth: 960, minHeight: 680)
+                .onAppear {
+                    if let icon = AppArtworkLoader.loadImage(named: "AppIcon.icns")
+                        ?? AppArtworkLoader.loadImage(named: "HeroSilhouette1.png") {
+                        NSApplication.shared.applicationIconImage = icon
+                    }
+                }
         }
         .windowStyle(.automatic)
     }
@@ -70,12 +76,18 @@ private struct WizardHeaderView: View {
 
     var body: some View {
         HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("PhotoOrganizer")
-                    .font(.title2.bold())
-                Text("Offline Apple Neural Engine Photo & Video Sorter")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                AnimatedSilhouetteHeroView(cornerRadius: 10, showSparkles: false)
+                    .frame(width: 44, height: 44)
+                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("PhotoOrganizer")
+                        .font(.title2.bold())
+                    Text("Offline Apple Neural Engine Photo & Video Sorter")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
@@ -184,9 +196,13 @@ private struct Step1FolderDropView: View {
 
     private var dropZone: some View {
         VStack(spacing: 12) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.system(size: 44))
-                .foregroundStyle(isDropTargeted ? Color.accentColor : .secondary)
+            AnimatedSilhouetteHeroView(cornerRadius: 12, showSparkles: true)
+                .frame(width: 156, height: 104)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(isDropTargeted ? Color.accentColor : Color.white.opacity(0.45), lineWidth: 1.5)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
 
             Text("Drop a Messy Photo & Video Folder Here")
                 .font(.headline)
@@ -634,5 +650,95 @@ private struct Step3CompletionView: View {
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private enum AppArtworkLoader {
+    static func loadImage(named filename: String) -> NSImage? {
+        let stem = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        var candidateURLs: [URL] = []
+
+        if let resURL = Bundle.main.resourceURL {
+            candidateURLs.append(resURL.appendingPathComponent(filename))
+            candidateURLs.append(resURL.appendingPathComponent("PhotoOrganizer_PhotoOrganizerCore.bundle/Contents/Resources/\(filename)"))
+            candidateURLs.append(resURL.appendingPathComponent("PhotoOrganizer_PhotoOrganizerCore.bundle/\(filename)"))
+        }
+        let execSibling = Bundle.main.bundleURL.appendingPathComponent("PhotoOrganizer_PhotoOrganizerCore.bundle")
+        candidateURLs.append(execSibling.appendingPathComponent(filename))
+        candidateURLs.append(execSibling.appendingPathComponent("Contents/Resources/\(filename)"))
+
+        for bundle in Bundle.allBundles {
+            if let url = bundle.url(forResource: stem, withExtension: ext) {
+                candidateURLs.append(url)
+            }
+        }
+
+        for url in candidateURLs where FileManager.default.fileExists(atPath: url.path) {
+            if let img = NSImage(contentsOf: url) {
+                return img
+            }
+        }
+        return nil
+    }
+}
+
+private struct AnimatedSilhouetteHeroView: View {
+    let cornerRadius: CGFloat
+    let showSparkles: Bool
+
+    private let frame1 = AppArtworkLoader.loadImage(named: "HeroSilhouette1.png")
+    private let frame2 = AppArtworkLoader.loadImage(named: "HeroSilhouette2.png")
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate * 1.4
+            let crossfade = 0.5 * (1.0 - cos(t))
+            let floatY = sin(t) * (showSparkles ? 2.5 : 1.0)
+            let breathScale = 1.0 + 0.015 * sin(t)
+
+            ZStack {
+                if let frame1 {
+                    Image(nsImage: frame1)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let frame2 {
+                    Image(nsImage: frame2)
+                        .resizable()
+                        .scaledToFill()
+                        .opacity(crossfade)
+                }
+
+                if showSparkles {
+                    Canvas { gfx, size in
+                        let anchors: [(Double, Double, Double)] = [
+                            (0.18, 0.28, 0.0),
+                            (0.28, 0.18, 1.4),
+                            (0.76, 0.22, 2.3),
+                            (0.86, 0.36, 3.6)
+                        ]
+                        for (ax, ay, offset) in anchors {
+                            let x = ax * size.width + sin(t + offset) * 3.0
+                            let y = ay * size.height - ((t * 4.0 + offset * 5.0).truncatingRemainder(dividingBy: 10.0))
+                            let alpha = 0.35 + 0.55 * (0.5 + 0.5 * sin(t * 2.0 + offset))
+                            let rect = CGRect(x: x - 2.0, y: y - 2.0, width: 4.0, height: 4.0)
+                            gfx.fill(
+                                Path(ellipseIn: rect),
+                                with: .color(Color(red: 1.0, green: 0.90, blue: 0.62).opacity(alpha))
+                            )
+                        }
+                    }
+                }
+            }
+            .scaleEffect(breathScale)
+            .offset(y: floatY)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
     }
 }

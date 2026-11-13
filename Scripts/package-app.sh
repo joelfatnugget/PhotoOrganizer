@@ -50,6 +50,11 @@ printf "APPL????" > "$APP_BUNDLE/Contents/PkgInfo"
 if [[ -d "$ROOT_DIR/Sources/PhotoOrganizerCore/Resources/MobileFaceNet.mlmodelc" ]]; then
   cp -R "$ROOT_DIR/Sources/PhotoOrganizerCore/Resources/MobileFaceNet.mlmodelc" "$APP_BUNDLE/Contents/Resources/"
 fi
+for asset in HeroSilhouette1.png HeroSilhouette2.png AppIcon.icns; do
+  if [[ -f "$ROOT_DIR/Sources/PhotoOrganizerCore/Resources/$asset" ]]; then
+    cp "$ROOT_DIR/Sources/PhotoOrganizerCore/Resources/$asset" "$APP_BUNDLE/Contents/Resources/"
+  fi
+done
 
 BIN_DIR="$(dirname "$BIN_PATH")"
 if [[ -d "$BIN_DIR/PhotoOrganizer_PhotoOrganizerCore.bundle" ]]; then
@@ -73,6 +78,8 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
     <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
     <string>$APP_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
