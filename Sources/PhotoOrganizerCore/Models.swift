@@ -73,20 +73,57 @@ public struct GPSCoordinate: Equatable, Hashable, Codable, Sendable {
     }
 }
 
-/// Reverse-geocoded city, country, and optional neighborhood/sub-locality.
+/// Reverse-geocoded city, country, optional sub-locality, and correlated venue/POI.
 public struct ResolvedLocation: Equatable, Hashable, Codable, Sendable {
     public let city: String
     public let country: String
     public let sublocality: String?
+    public var venueName: String?
+    public var venueCategory: String?
 
-    public init(city: String, country: String, sublocality: String? = nil) {
+    public init(
+        city: String,
+        country: String,
+        sublocality: String? = nil,
+        venueName: String? = nil,
+        venueCategory: String? = nil
+    ) {
         self.city = city
         self.country = country
         self.sublocality = sublocality
+        self.venueName = venueName
+        self.venueCategory = venueCategory
+    }
+
+    public var displayVenueOrSublocality: String? {
+        venueName ?? sublocality
     }
 
     public var folderName: String {
         "\(city), \(country)"
+    }
+}
+
+/// Structured merchant and total amount parsed from receipt OCR text.
+public struct ReceiptMetadata: Equatable, Hashable, Codable, Sendable {
+    public let merchantName: String?
+    public let totalAmount: Double?
+    public let currencySymbol: String?
+
+    public init(
+        merchantName: String? = nil,
+        totalAmount: Double? = nil,
+        currencySymbol: String? = nil
+    ) {
+        self.merchantName = merchantName
+        self.totalAmount = totalAmount
+        self.currencySymbol = currencySymbol
+    }
+
+    public var formattedTotal: String? {
+        guard let totalAmount else { return nil }
+        let symbol = currencySymbol ?? "$"
+        return String(format: "%@%.2f", symbol, totalAmount)
     }
 }
 
@@ -99,6 +136,8 @@ public struct DetectedFace: Identifiable, Equatable, Codable, Sendable {
     public let embedding: [Float]?
     public let thumbnailJPEGData: Data?
     public var clusterId: Int?
+    public let eyesOpen: Bool
+    public let captureQuality: Float?
 
     public init(
         id: UUID = UUID(),
@@ -107,7 +146,9 @@ public struct DetectedFace: Identifiable, Equatable, Codable, Sendable {
         featurePrintData: Data? = nil,
         embedding: [Float]? = nil,
         thumbnailJPEGData: Data? = nil,
-        clusterId: Int? = nil
+        clusterId: Int? = nil,
+        eyesOpen: Bool = true,
+        captureQuality: Float? = nil
     ) {
         self.id = id
         self.boundingBox = boundingBox
@@ -116,6 +157,8 @@ public struct DetectedFace: Identifiable, Equatable, Codable, Sendable {
         self.embedding = embedding
         self.thumbnailJPEGData = thumbnailJPEGData
         self.clusterId = clusterId
+        self.eyesOpen = eyesOpen
+        self.captureQuality = captureQuality
     }
 }
 
@@ -205,6 +248,15 @@ public struct AnalyzedMediaItem: Identifiable, Equatable, Sendable {
     public var primaryCategory: PhotoCategory
     public var assignedDiningSessionID: UUID?
     public var assignedFaceClusterIDs: [Int]
+    public var cameraModel: String?
+    public var sharpnessScore: Double
+    public var qualityScore: Double
+    public var isBlurry: Bool
+    public var hasClosedEyes: Bool
+    public var burstGroupID: UUID?
+    public var isBurstBestShot: Bool
+    public var isBurstExtra: Bool
+    public var receiptMetadata: ReceiptMetadata?
 
     public var effectiveGPS: GPSCoordinate? {
         rawGPS ?? inferredGPS
@@ -231,7 +283,16 @@ public struct AnalyzedMediaItem: Identifiable, Equatable, Sendable {
         detectedCategories: Set<PhotoCategory> = [],
         primaryCategory: PhotoCategory = .sceneryAndGeneral,
         assignedDiningSessionID: UUID? = nil,
-        assignedFaceClusterIDs: [Int] = []
+        assignedFaceClusterIDs: [Int] = [],
+        cameraModel: String? = nil,
+        sharpnessScore: Double = 0.5,
+        qualityScore: Double = 0.5,
+        isBlurry: Bool = false,
+        hasClosedEyes: Bool = false,
+        burstGroupID: UUID? = nil,
+        isBurstBestShot: Bool = false,
+        isBurstExtra: Bool = false,
+        receiptMetadata: ReceiptMetadata? = nil
     ) {
         self.id = id
         self.sourceURL = sourceURL
@@ -254,6 +315,15 @@ public struct AnalyzedMediaItem: Identifiable, Equatable, Sendable {
         self.primaryCategory = primaryCategory
         self.assignedDiningSessionID = assignedDiningSessionID
         self.assignedFaceClusterIDs = assignedFaceClusterIDs
+        self.cameraModel = cameraModel
+        self.sharpnessScore = sharpnessScore
+        self.qualityScore = qualityScore
+        self.isBlurry = isBlurry
+        self.hasClosedEyes = hasClosedEyes
+        self.burstGroupID = burstGroupID
+        self.isBurstBestShot = isBurstBestShot
+        self.isBurstExtra = isBurstExtra
+        self.receiptMetadata = receiptMetadata
     }
 }
 
@@ -262,17 +332,29 @@ public struct OrganizationOptions: Equatable, Sendable {
     public var executionMode: ExecutionMode
     public var enableMultiCategoryCrossLinks: Bool
     public var deduplicateExactMatches: Bool
+    public var fallbackLocationQuery: String
+    public var separateBlurryPhotos: Bool
+    public var separateBurstExtras: Bool
+    public var generateHTMLReport: Bool
     public var timeZone: TimeZone
 
     public init(
         executionMode: ExecutionMode = .safeCopyAPFSClone,
         enableMultiCategoryCrossLinks: Bool = true,
         deduplicateExactMatches: Bool = true,
+        fallbackLocationQuery: String = "",
+        separateBlurryPhotos: Bool = true,
+        separateBurstExtras: Bool = false,
+        generateHTMLReport: Bool = true,
         timeZone: TimeZone = .current
     ) {
         self.executionMode = executionMode
         self.enableMultiCategoryCrossLinks = enableMultiCategoryCrossLinks
         self.deduplicateExactMatches = deduplicateExactMatches
+        self.fallbackLocationQuery = fallbackLocationQuery
+        self.separateBlurryPhotos = separateBlurryPhotos
+        self.separateBurstExtras = separateBurstExtras
+        self.generateHTMLReport = generateHTMLReport
         self.timeZone = timeZone
     }
 }

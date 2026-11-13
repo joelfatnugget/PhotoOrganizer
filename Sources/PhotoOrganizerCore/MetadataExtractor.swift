@@ -11,6 +11,7 @@ public struct ExtractedMetadata: Sendable {
     public let isScreenshot: Bool
     public let fileSize: Int64
     public let sha256Hash: String
+    public let cameraModel: String?
 
     public init(
         captureDate: Date,
@@ -18,7 +19,8 @@ public struct ExtractedMetadata: Sendable {
         gps: GPSCoordinate?,
         isScreenshot: Bool,
         fileSize: Int64,
-        sha256Hash: String
+        sha256Hash: String,
+        cameraModel: String? = nil
     ) {
         self.captureDate = captureDate
         self.dateSource = dateSource
@@ -26,6 +28,7 @@ public struct ExtractedMetadata: Sendable {
         self.isScreenshot = isScreenshot
         self.fileSize = fileSize
         self.sha256Hash = sha256Hash
+        self.cameraModel = cameraModel
     }
 }
 
@@ -60,6 +63,7 @@ public struct MetadataExtractor: Sendable {
         var captureDate: Date?
         var dateSource: DateSource = .fileSystem
         var gps: GPSCoordinate?
+        var cameraModel: String?
         var isScreenshot = Self.isScreenshotFilename(url.lastPathComponent)
 
         if !isVideo, let properties = Self.readImageProperties(from: url) {
@@ -68,6 +72,7 @@ public struct MetadataExtractor: Sendable {
                 dateSource = .exif
             }
             gps = Self.extractEXIFGPS(from: properties)
+            cameraModel = Self.extractCameraModel(from: properties)
             if Self.hasScreenshotEXIFMarker(in: properties) {
                 isScreenshot = true
             }
@@ -96,8 +101,33 @@ public struct MetadataExtractor: Sendable {
             gps: gps,
             isScreenshot: isScreenshot,
             fileSize: fileSize,
-            sha256Hash: hash
+            sha256Hash: hash,
+            cameraModel: cameraModel
         )
+    }
+
+    private static func extractCameraModel(from properties: [String: Any]) -> String? {
+        guard let tiff = properties[kCGImagePropertyTIFFDictionary as String] as? [String: Any] else {
+            return nil
+        }
+        let make = (tiff[kCGImagePropertyTIFFMake as String] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (tiff[kCGImagePropertyTIFFModel as String] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch (make, model) {
+        case (let m?, let mod?) where !m.isEmpty && !mod.isEmpty:
+            if mod.localizedCaseInsensitiveContains(m) {
+                return mod
+            }
+            return "\(m) \(mod)"
+        case (_, let mod?) where !mod.isEmpty:
+            return mod
+        case (let m?, _) where !m.isEmpty:
+            return m
+        default:
+            return nil
+        }
     }
 
     // MARK: - Live Photo Content Identifier

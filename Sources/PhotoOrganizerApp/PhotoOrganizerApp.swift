@@ -246,9 +246,30 @@ private struct Step1FolderDropView: View {
                 }
                 .pickerStyle(.segmented)
 
-                HStack(spacing: 24) {
-                    Toggle("Cross-Link Multi-Category Photos (0 bytes on APFS)", isOn: $viewModel.options.enableMultiCategoryCrossLinks)
-                    Toggle("Isolate Exact Duplicates into _Duplicates/", isOn: $viewModel.options.deduplicateExactMatches)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Fallback Venue / Location (Optional, used when photos lack GPS metadata)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        "e.g. National University of Singapore",
+                        text: $viewModel.options.fallbackLocationQuery
+                    )
+                    .textFieldStyle(.roundedBorder)
+                }
+
+                Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 8) {
+                    GridRow {
+                        Toggle("Cross-Link Multi-Category & Group Photos (0 bytes on APFS)", isOn: $viewModel.options.enableMultiCategoryCrossLinks)
+                        Toggle("Isolate Exact Duplicates into _Duplicates/", isOn: $viewModel.options.deduplicateExactMatches)
+                    }
+                    GridRow {
+                        Toggle("Separate Blurry Shots into _Blurry & Outtakes/", isOn: $viewModel.options.separateBlurryPhotos)
+                        Toggle("Separate Burst Extras into _Burst Extras/", isOn: $viewModel.options.separateBurstExtras)
+                    }
+                    GridRow {
+                        Toggle("Generate Interactive HTML Map & Report (index.html)", isOn: $viewModel.options.generateHTMLReport)
+                        Spacer()
+                    }
                 }
             }
             .padding(8)
@@ -364,6 +385,22 @@ private struct Step2DryRunPreviewView: View {
                         }
                     ))
                     .padding(.leading, 8)
+
+                    Toggle("Separate Blurry", isOn: Binding(
+                        get: { viewModel.options.separateBlurryPhotos },
+                        set: { newValue in
+                            viewModel.options.separateBlurryPhotos = newValue
+                            viewModel.refreshPlanFromCurrentOptions()
+                        }
+                    ))
+
+                    Toggle("Separate Burst Extras", isOn: Binding(
+                        get: { viewModel.options.separateBurstExtras },
+                        set: { newValue in
+                            viewModel.options.separateBurstExtras = newValue
+                            viewModel.refreshPlanFromCurrentOptions()
+                        }
+                    ))
 
                     Spacer()
 
@@ -562,12 +599,22 @@ private struct Step3CompletionView: View {
             }
 
             HStack(spacing: 14) {
+                if viewModel.canOpenHTMLReport {
+                    Button {
+                        viewModel.openHTMLReport()
+                    } label: {
+                        Label("Open Interactive Map & Report", systemImage: "map")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
+
                 Button {
                     viewModel.revealDestinationInFinder()
                 } label: {
                     Label("Reveal in Finder", systemImage: "folder")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.bordered)
                 .controlSize(.large)
 
                 Button(role: .destructive) {

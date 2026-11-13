@@ -5,14 +5,20 @@ public struct OrganizationEngine: Sendable {
     private let scanner = MediaScanner()
     private let metadataExtractor = MetadataExtractor()
     private let geocoder: OfflineGeocoder
+    private let venueResolver: VenueResolver
     private let visionAnalyzer = VisionAnalyzer()
+    private let burstClusterer = BurstClusterer()
     private let diningClusterer = DiningSessionClusterer()
     private let faceClusterer = FaceDBSCANClusterer()
     private let planner = OrganizationPlanner()
     private let executor = FileExecutor()
 
-    public init(geocoder: OfflineGeocoder = OfflineGeocoder()) {
+    public init(
+        geocoder: OfflineGeocoder = OfflineGeocoder(),
+        venueResolver: VenueResolver = VenueResolver()
+    ) {
         self.geocoder = geocoder
+        self.venueResolver = venueResolver
     }
 
     /// Runs the full offline analysis and returns a dry-run `OrganizationPlan` without modifying files.
@@ -52,7 +58,8 @@ public struct OrganizationEngine: Sendable {
                     captureDate: meta.captureDate,
                     dateSource: meta.dateSource,
                     rawGPS: meta.gps,
-                    isScreenshot: meta.isScreenshot
+                    isScreenshot: meta.isScreenshot,
+                    cameraModel: meta.cameraModel
                 )
             )
             onProgress?(PipelineProgress(stage: .metadata, completed: index + 1, total: max(1, total)))
@@ -62,7 +69,7 @@ public struct OrganizationEngine: Sendable {
         geocoder.inferMissingGPS(for: &items)
         geocoder.resolveLocations(for: &items)
 
-        // Stage 2: On-device Vision Neural Engine pass (skip exact duplicates and screenshots if desired, or analyze non-duplicates).
+        // Stage 2: On-device Vision Neural Engine pass (skip exact duplicates and screenshots).
         for idx in items.indices {
             try Task.checkCancellation()
             if !(options.deduplicateExactMatches && items[idx].isDuplicate) && !items[idx].isScreenshot {
@@ -71,18 +78,32 @@ public struct OrganizationEngine: Sendable {
                     mediaKind: items[idx].mediaKind
                 )
                 items[idx].isReceipt = visionResult.isReceipt
+                items[idx].receiptMetadata = visionResult.receiptMetadata
                 items[idx].isFood = visionResult.isFood
                 items[idx].isPet = visionResult.isPet
                 items[idx].faces = visionResult.faces
+                items[idx].sharpnessScore = visionResult.sharpnessScore
+                items[idx].isBlurry = visionResult.isBlurry
+                items[idx].hasClosedEyes = visionResult.hasClosedEyes
             }
             onProgress?(PipelineProgress(stage: .vision, completed: idx + 1, total: max(1, total)))
         }
 
-        onProgress?(PipelineProgress(stage: .clustering, completed: 0, total: 2))
+        onProgress?(PipelineProgress(stage: .clustering, completed: 0, total: 4))
+        // Apply fallback query for non-GPS cameras and correlate clusters to nearby venues/POIs.
+        await venueResolver.enrichLocationsAndVenues(
+            for: &items,
+            fallbackQuery: options.fallbackLocationQuery,
+            geocoder: geocoder
+        )
+        OrganizationPlanner.classifyCategories(for: &items)
+        onProgress?(PipelineProgress(stage: .clustering, completed: 1, total: 4))
+        burstClusterer.cluster(items: &items)
+        onProgress?(PipelineProgress(stage: .clustering, completed: 2, total: 4))
         let diningSessions = diningClusterer.cluster(items: &items, timeZone: options.timeZone)
-        onProgress?(PipelineProgress(stage: .clustering, completed: 1, total: 2))
+        onProgress?(PipelineProgress(stage: .clustering, completed: 3, total: 4))
         let faceClusters = faceClusterer.cluster(items: &items)
-        onProgress?(PipelineProgress(stage: .clustering, completed: 2, total: 2))
+        onProgress?(PipelineProgress(stage: .clustering, completed: 4, total: 4))
 
         onProgress?(PipelineProgress(stage: .planning, completed: 0, total: 1))
         let plan = planner.buildPlan(

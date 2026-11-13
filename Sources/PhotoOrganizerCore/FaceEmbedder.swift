@@ -72,6 +72,7 @@ public struct FaceEmbedder: Sendable {
             let thumbnailData = encodeJPEG(cgImage: alignedCrop, maxDimension: 128)
             let embedding = computeMobileFaceNetEmbedding(for: alignedCrop)
             let featurePrintData = (embedding == nil) ? computeFallbackFeaturePrint(for: alignedCrop) : nil
+            let eyesOpen = QualityAnalyzer.areEyesOpen(observation: obs)
 
             detected.append(
                 DetectedFace(
@@ -80,7 +81,9 @@ public struct FaceEmbedder: Sendable {
                     featurePrintData: featurePrintData,
                     embedding: embedding,
                     thumbnailJPEGData: thumbnailData,
-                    clusterId: nil
+                    clusterId: nil,
+                    eyesOpen: eyesOpen,
+                    captureQuality: obs.faceCaptureQuality
                 )
             )
         }

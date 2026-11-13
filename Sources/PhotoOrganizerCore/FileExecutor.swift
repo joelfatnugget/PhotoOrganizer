@@ -49,6 +49,11 @@ public struct FileExecutor: Sendable {
             let effectiveSourceURL = relocatedSourceByOriginalURL[op.sourceURL] ?? op.sourceURL
             let shouldMove = (plan.options.executionMode == .inPlaceMove) && !op.isSecondaryCrossLink
 
+            if effectiveSourceURL.standardizedFileURL != op.destinationURL.standardizedFileURL,
+               fileManager.fileExists(atPath: op.destinationURL.path) {
+                try fileManager.removeItem(at: op.destinationURL)
+            }
+
             if shouldMove {
                 if effectiveSourceURL.standardizedFileURL != op.destinationURL.standardizedFileURL {
                     try fileManager.moveItem(at: effectiveSourceURL, to: op.destinationURL)
@@ -89,6 +94,10 @@ public struct FileExecutor: Sendable {
         let data = try encoder.encode(journal)
         try data.write(to: journalURL, options: .atomic)
 
+        if plan.options.generateHTMLReport {
+            try HTMLReportGenerator().generate(plan: plan)
+        }
+
         return journal
     }
 
@@ -123,6 +132,11 @@ public struct FileExecutor: Sendable {
                     try fileManager.removeItem(at: dstURL)
                 }
             }
+        }
+
+        let htmlReportURL = destinationRootURL.appendingPathComponent(HTMLReportGenerator.filename)
+        if fileManager.fileExists(atPath: htmlReportURL.path) {
+            try? fileManager.removeItem(at: htmlReportURL)
         }
 
         try fileManager.removeItem(at: journalURL)

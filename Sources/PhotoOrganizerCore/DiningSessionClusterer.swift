@@ -71,7 +71,7 @@ public struct DiningSessionClusterer: Sendable {
             let endTime: Date
             let location: ResolvedLocation?
             let mealLabel: String
-            let baseName: String
+            var baseName: String
             var itemIndices: [Int]
         }
 
@@ -83,20 +83,13 @@ public struct DiningSessionClusterer: Sendable {
             let mealLabel = Self.mealLabel(for: start, calendar: calendar)
             let datePrefix = dateFormatter.string(from: start)
 
-            var baseName = "\(datePrefix) \(mealLabel)"
-            if let sub = location?.sublocality,
-               let city = location?.city,
-               sub.caseInsensitiveCompare(city) != .orderedSame {
-                baseName += " (\(sub))"
-            }
-
             return DraftSession(
                 id: sessionID,
                 startTime: start,
                 endTime: end,
                 location: location,
                 mealLabel: mealLabel,
-                baseName: baseName,
+                baseName: "\(datePrefix) \(mealLabel)",
                 itemIndices: group
             )
         }
@@ -119,6 +112,33 @@ public struct DiningSessionClusterer: Sendable {
                 drafts[draftIdx].itemIndices.append(receiptIdx)
                 break
             }
+        }
+
+        // Recompute folder names now that nearby receipts (with potential merchant names) are attached.
+        for draftIdx in drafts.indices {
+            let loc = drafts[draftIdx].itemIndices
+                .compactMap { items[$0].resolvedLocation }
+                .first(where: { $0.venueName != nil })
+                ?? drafts[draftIdx].location
+            let merchantName = drafts[draftIdx].itemIndices
+                .compactMap { items[$0].receiptMetadata?.merchantName }
+                .first
+            let rawVenueLabel = loc?.venueName ?? merchantName
+            let venueLabel = rawVenueLabel?
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var folderName = drafts[draftIdx].baseName
+            if let venue = venueLabel, !venue.isEmpty {
+                folderName += " - \(venue)"
+            }
+            if let sub = loc?.sublocality,
+               let city = loc?.city,
+               sub.caseInsensitiveCompare(city) != .orderedSame {
+                folderName += " (\(sub))"
+            }
+            drafts[draftIdx].baseName = folderName
         }
 
         // Disambiguate duplicate base names on the same day ("- Visit 1", "- Visit 2").

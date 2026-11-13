@@ -60,6 +60,14 @@ final class PhotoOrganizerCoreTests: XCTestCase {
         }
         ctx.setFillColor(red: seedColor.0, green: seedColor.1, blue: seedColor.2, alpha: 1.0)
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        // Draw high-contrast black/white micro-grid inside the center so synthetic sharp fixtures have high Laplacian variance.
+        for y in stride(from: 16, to: height - 16, by: 8) {
+            for x in stride(from: 16, to: width - 16, by: 8) {
+                let isLight = ((x + y) / 8) % 2 == 0
+                ctx.setFillColor(gray: isLight ? 0.95 : 0.05, alpha: 1.0)
+                ctx.fill(CGRect(x: x, y: y, width: 4, height: 4))
+            }
+        }
         guard let cgImage = ctx.makeImage() else {
             XCTFail("Could not make CGImage")
             return
@@ -373,7 +381,7 @@ final class PhotoOrganizerCoreTests: XCTestCase {
             items: items,
             faceClusters: clusters,
             diningSessions: [],
-            options: OrganizationOptions(timeZone: tz)
+            options: OrganizationOptions(separateBurstExtras: true, timeZone: tz)
         )
 
         let paths = plan.operations.map(\.destinationRelativePath)
@@ -425,7 +433,7 @@ final class PhotoOrganizerCoreTests: XCTestCase {
             items: items,
             faceClusters: clusters,
             diningSessions: [],
-            options: OrganizationOptions(timeZone: tz)
+            options: OrganizationOptions(separateBurstExtras: true, timeZone: tz)
         )
         let paths = plan.operations.map(\.destinationRelativePath)
         XCTAssertTrue(paths.contains("2025/07 - July/Unknown Location/People/Group Photos/duo.jpg"))
@@ -459,7 +467,7 @@ final class PhotoOrganizerCoreTests: XCTestCase {
             seedColor: (0.9, 0.2, 0.2)
         )
 
-        let engine = OrganizationEngine()
+        let engine = OrganizationEngine(venueResolver: VenueResolver(enableMapKitLookup: false))
         let tz = TimeZone.current
 
         // Mode 1: Safe Copy (APFS Zero-Space Clone)
@@ -473,18 +481,23 @@ final class PhotoOrganizerCoreTests: XCTestCase {
         let cloneJournal = try engine.execute(plan: clonePlan)
         XCTAssertEqual(cloneJournal.records.count, 3)
         XCTAssertTrue(FileExecutor.hasUndoJournal(at: destCloneDir))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: destCloneDir.appendingPathComponent("index.html").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: shot1.path))
 
         let expectedShot1 = destCloneDir.appendingPathComponent("2025/04 - April/Kyoto, Japan/Scenery & General/IMG_0001.jpg")
         let expectedDup = destCloneDir.appendingPathComponent("_Duplicates/IMG_0001_copy.jpg")
         let expectedScreen = destCloneDir.appendingPathComponent("2025/04 - April/Unknown Location/Screenshots/Screenshot 2025-04-12 at 10.15.00.png")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: expectedShot1.path))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: expectedShot1.path),
+            "Missing expectedShot1. Actual ops: \(clonePlan.operations.map(\.destinationRelativePath)), item0: isBlurry=\(clonePlan.items[0].isBlurry), sharpness=\(clonePlan.items[0].sharpnessScore)"
+        )
         XCTAssertTrue(FileManager.default.fileExists(atPath: expectedDup.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: expectedScreen.path))
 
         // Undo clone organization
         try engine.undo(at: destCloneDir)
         XCTAssertFalse(FileExecutor.hasUndoJournal(at: destCloneDir))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: destCloneDir.appendingPathComponent("index.html").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: expectedShot1.path))
 
         // Mode 2: In-Place Move + Undo restoration
@@ -501,5 +514,161 @@ final class PhotoOrganizerCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: shot1.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: shot1Duplicate.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: screenshot.path))
+    }
+
+    // MARK: - 7. Venue Correlation, Receipt Parsing, Blur/Burst Routing, Group Cross-Links & HTML Report
+
+    func testReceiptMetadataParsing() throws {
+        let lines = [
+            "DIN TAI FUNG SINGAPORE",
+            "290 Orchard Rd #B1-03",
+            "1 x Xiao Long Bao 14.80",
+            "Subtotal 14.80",
+            "GST 9% 1.33",
+            "TOTAL S$16.13",
+            "TAX TOTAL S$1.33",
+            "VISA XXXX 1234"
+        ]
+        let meta = try XCTUnwrap(ReceiptDetector.parseReceiptMetadata(lines: lines))
+        XCTAssertEqual(meta.merchantName, "DIN TAI FUNG SINGAPORE")
+        XCTAssertEqual(meta.currencySymbol, "S$")
+        XCTAssertNotNil(meta.totalAmount)
+        XCTAssertEqual(meta.totalAmount ?? 0, 16.13, accuracy: 0.01)
+    }
+
+    func testOfflineGeocoderVenueAndFallbackResolution() {
+        let geocoder = OfflineGeocoder()
+
+        let uccLoc = geocoder.resolve(coordinate: GPSCoordinate(latitude: 1.3016, longitude: 103.7719))
+        XCTAssertEqual(uccLoc?.city, "Singapore")
+        XCTAssertEqual(uccLoc?.country, "Singapore")
+        XCTAssertEqual(uccLoc?.venueName, "University Cultural Centre (NUS)")
+
+        let fallback = geocoder.resolveFallbackQuery("National University of Singapore")
+        XCTAssertNotNil(fallback)
+        XCTAssertEqual(fallback?.location.city, "Singapore")
+        XCTAssertEqual(fallback?.location.venueName, "National University of Singapore")
+
+        let aliasFallback = geocoder.resolveFallbackQuery("NUS")
+        XCTAssertEqual(aliasFallback?.location.venueName, "National University of Singapore")
+    }
+
+    func testBurstClusteringBlurAndEyeRouting() {
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let t0 = makeDate(year: 2025, month: 7, day: 10, hour: 15, minute: 0, timeZone: tz)
+        let fOpen = DetectedFace(boundingBox: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3), areaRatio: 0.09, embedding: [1, 0, 0, 0], eyesOpen: true)
+        let fClosed = DetectedFace(boundingBox: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3), areaRatio: 0.09, embedding: [1, 0, 0, 0], eyesOpen: false)
+
+        var items = [
+            // Burst shot 1: closed eyes -> Burst Extra
+            AnalyzedMediaItem(
+                sourceURL: URL(fileURLWithPath: "/tmp/burst1.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "b1", captureDate: t0, dateSource: .exif,
+                faces: [fClosed], sharpnessScore: 0.30, isBlurry: false, hasClosedEyes: true
+            ),
+            // Burst shot 2: sharp open eyes -> Best Shot
+            AnalyzedMediaItem(
+                sourceURL: URL(fileURLWithPath: "/tmp/burst2.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "b2", captureDate: t0.addingTimeInterval(1.0), dateSource: .exif,
+                faces: [fOpen], sharpnessScore: 0.45, isBlurry: false, hasClosedEyes: false
+            ),
+            // Motion-blur solo shot later -> _Blurry & Outtakes
+            AnalyzedMediaItem(
+                sourceURL: URL(fileURLWithPath: "/tmp/blurry.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "b3", captureDate: t0.addingTimeInterval(30.0), dateSource: .exif,
+                faces: [fOpen], sharpnessScore: 0.03, isBlurry: true, hasClosedEyes: false
+            )
+        ]
+
+        OrganizationPlanner.classifyCategories(for: &items)
+        BurstClusterer().cluster(items: &items)
+
+        XCTAssertTrue(items[0].isBurstExtra)
+        XCTAssertTrue(items[1].isBurstBestShot)
+        XCTAssertFalse(items[1].isBurstExtra)
+        XCTAssertNotNil(items[0].burstGroupID)
+        XCTAssertEqual(items[0].burstGroupID, items[1].burstGroupID)
+
+        let plan = OrganizationPlanner().buildPlan(
+            sourceRootURL: URL(fileURLWithPath: "/tmp"),
+            destinationRootURL: URL(fileURLWithPath: "/tmp/out"),
+            items: items,
+            faceClusters: [],
+            diningSessions: [],
+            options: OrganizationOptions(separateBurstExtras: true, timeZone: tz)
+        )
+        let paths = plan.operations.map(\.destinationRelativePath)
+        XCTAssertTrue(paths.contains("2025/07 - July/Unknown Location/People/Other People/_Burst Extras/burst1.jpg"))
+        XCTAssertTrue(paths.contains("2025/07 - July/Unknown Location/People/Other People/burst2.jpg"))
+        XCTAssertTrue(paths.contains("2025/07 - July/Unknown Location/People/Other People/_Blurry & Outtakes/blurry.jpg"))
+    }
+
+    func testPerPersonGroupPhotoCrossLinkingAndHTMLReport() throws {
+        let dir = try makeTempDirectory()
+        let outDir = dir.appendingPathComponent("Organized", isDirectory: true)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let sarahA: [Float] = [1, 0, 0, 0]
+        let sarahB: [Float] = [0.99, 0.05, 0, 0]
+        let johnA: [Float] = [0, 1, 0, 0]
+        let johnB: [Float] = [0.05, 0.99, 0, 0]
+
+        var items = [
+            AnalyzedMediaItem(
+                sourceURL: dir.appendingPathComponent("sarah.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "g1",
+                captureDate: makeDate(year: 2025, month: 7, day: 15, hour: 10, minute: 0, timeZone: tz),
+                dateSource: .exif,
+                rawGPS: GPSCoordinate(latitude: 1.3016, longitude: 103.7719),
+                resolvedLocation: ResolvedLocation(city: "Singapore", country: "Singapore", sublocality: "Kent Ridge", venueName: "NUS University Cultural Centre"),
+                faces: [DetectedFace(boundingBox: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3), areaRatio: 0.09, embedding: sarahA)]
+            ),
+            AnalyzedMediaItem(
+                sourceURL: dir.appendingPathComponent("john.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "g2",
+                captureDate: makeDate(year: 2025, month: 7, day: 15, hour: 10, minute: 2, timeZone: tz),
+                dateSource: .exif,
+                rawGPS: GPSCoordinate(latitude: 1.3016, longitude: 103.7719),
+                resolvedLocation: ResolvedLocation(city: "Singapore", country: "Singapore", sublocality: "Kent Ridge", venueName: "NUS University Cultural Centre"),
+                faces: [DetectedFace(boundingBox: CGRect(x: 0.2, y: 0.2, width: 0.3, height: 0.3), areaRatio: 0.09, embedding: johnA)]
+            ),
+            AnalyzedMediaItem(
+                sourceURL: dir.appendingPathComponent("together.jpg"), mediaKind: .photo,
+                fileSize: 10, sha256Hash: "g3",
+                captureDate: makeDate(year: 2025, month: 7, day: 15, hour: 10, minute: 5, timeZone: tz),
+                dateSource: .exif,
+                rawGPS: GPSCoordinate(latitude: 1.3016, longitude: 103.7719),
+                resolvedLocation: ResolvedLocation(city: "Singapore", country: "Singapore", sublocality: "Kent Ridge", venueName: "NUS University Cultural Centre"),
+                faces: [
+                    DetectedFace(boundingBox: CGRect(x: 0.1, y: 0.2, width: 0.25, height: 0.25), areaRatio: 0.0625, embedding: sarahB),
+                    DetectedFace(boundingBox: CGRect(x: 0.6, y: 0.2, width: 0.25, height: 0.25), areaRatio: 0.0625, embedding: johnB)
+                ]
+            )
+        ]
+
+        let clusters = FaceDBSCANClusterer().cluster(items: &items)
+        XCTAssertEqual(clusters.count, 2)
+
+        let plan = OrganizationPlanner().buildPlan(
+            sourceRootURL: dir,
+            destinationRootURL: outDir,
+            items: items,
+            faceClusters: clusters,
+            diningSessions: [],
+            options: OrganizationOptions(enableMultiCategoryCrossLinks: true, timeZone: tz)
+        )
+
+        let paths = plan.operations.map(\.destinationRelativePath)
+        XCTAssertTrue(paths.contains("2025/07 - July/Singapore, Singapore/People/Group Photos/together.jpg"))
+        XCTAssertTrue(paths.contains("2025/07 - July/Singapore, Singapore/People/Person 1/Group Photos/together.jpg"))
+        XCTAssertTrue(paths.contains("2025/07 - July/Singapore, Singapore/People/Person 2/Group Photos/together.jpg"))
+
+        let htmlURL = try HTMLReportGenerator().generate(plan: plan)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: htmlURL.path))
+        let htmlContent = try String(contentsOf: htmlURL, encoding: .utf8)
+        XCTAssertTrue(htmlContent.contains("NUS University Cultural Centre"))
+        XCTAssertTrue(htmlContent.contains("together.jpg"))
+        XCTAssertTrue(htmlContent.contains("leaflet.js"))
     }
 }

@@ -175,6 +175,20 @@ final class OrganizerViewModel: ObservableObject {
         currentStep = .selectFolders
     }
 
+    var canOpenHTMLReport: Bool {
+        guard let destinationURL else { return false }
+        let htmlURL = destinationURL.appendingPathComponent(HTMLReportGenerator.filename)
+        return FileManager.default.fileExists(atPath: htmlURL.path)
+    }
+
+    func openHTMLReport() {
+        guard let destinationURL else { return }
+        let htmlURL = destinationURL.appendingPathComponent(HTMLReportGenerator.filename)
+        if FileManager.default.fileExists(atPath: htmlURL.path) {
+            NSWorkspace.shared.open(htmlURL)
+        }
+    }
+
     func revealDestinationInFinder() {
         guard let destinationURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([destinationURL])

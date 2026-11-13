@@ -152,7 +152,14 @@ public struct OrganizationPlanner: Sendable {
             let locationString = sanitizeFolderComponent(item.resolvedLocation?.folderName ?? "Unknown Location")
 
             let basePrefix = "\(yearString)/\(monthString)/\(locationString)"
-            let primaryCategoryPath = categoryFolderPath(for: item, category: item.primaryCategory)
+            var primaryCategoryPath = categoryFolderPath(for: item, category: item.primaryCategory)
+            let isQualitySubfoldered = (options.separateBlurryPhotos && item.isBlurry)
+                || (options.separateBurstExtras && item.isBurstExtra)
+            if options.separateBlurryPhotos && item.isBlurry {
+                primaryCategoryPath += "/_Blurry & Outtakes"
+            } else if options.separateBurstExtras && item.isBurstExtra {
+                primaryCategoryPath += "/_Burst Extras"
+            }
 
             appendUnitOperations(
                 for: item,
@@ -161,7 +168,7 @@ public struct OrganizationPlanner: Sendable {
                 isSecondaryCrossLink: false
             )
 
-            if options.enableMultiCategoryCrossLinks {
+            if options.enableMultiCategoryCrossLinks && !isQualitySubfoldered {
                 var extraCategories = item.detectedCategories
                 extraCategories.remove(item.primaryCategory)
                 extraCategories.remove(.sceneryAndGeneral)
@@ -179,6 +186,20 @@ public struct OrganizationPlanner: Sendable {
                         category: extraCategory,
                         isSecondaryCrossLink: true
                     )
+                }
+
+                // Multi-person photos live in People/Group Photos; cross-link into each identified person's folder.
+                if item.faces.count > 1 && item.detectedCategories.contains(.people) {
+                    for cid in item.assignedFaceClusterIDs.sorted() {
+                        guard let cluster = clusterByID[cid] else { continue }
+                        let personGroupPath = "\(PhotoCategory.people.folderName)/\(sanitizeFolderComponent(cluster.folderName))/Group Photos"
+                        appendUnitOperations(
+                            for: item,
+                            folderRelativePath: "\(basePrefix)/\(personGroupPath)",
+                            category: .people,
+                            isSecondaryCrossLink: true
+                        )
+                    }
                 }
             }
         }

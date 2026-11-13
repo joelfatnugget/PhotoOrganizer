@@ -17,7 +17,7 @@ public struct ScannedMediaEntry: Equatable, Sendable {
 public struct MediaScanner: Sendable {
     public static let photoExtensions: Set<String> = [
         "jpg", "jpeg", "heic", "heif", "png", "webp",
-        "raw", "dng", "cr2", "nef", "arw", "tiff", "tif"
+        "raw", "dng", "cr2", "cr3", "nef", "arw", "raf", "rw2", "orf", "tiff", "tif"
     ]
 
     public static let videoExtensions: Set<String> = [

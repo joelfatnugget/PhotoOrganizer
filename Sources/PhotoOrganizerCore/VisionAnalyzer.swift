@@ -7,20 +7,32 @@ import Vision
 /// Result of running Apple Vision on-device analysis on a photo or bounded video keyframes.
 public struct VisionAnalysisResult: Sendable {
     public var isReceipt: Bool
+    public var receiptMetadata: ReceiptMetadata?
     public var isFood: Bool
     public var isPet: Bool
     public var faces: [DetectedFace]
+    public var sharpnessScore: Double
+    public var isBlurry: Bool
+    public var hasClosedEyes: Bool
 
     public init(
         isReceipt: Bool = false,
+        receiptMetadata: ReceiptMetadata? = nil,
         isFood: Bool = false,
         isPet: Bool = false,
-        faces: [DetectedFace] = []
+        faces: [DetectedFace] = [],
+        sharpnessScore: Double = 0.5,
+        isBlurry: Bool = false,
+        hasClosedEyes: Bool = false
     ) {
         self.isReceipt = isReceipt
+        self.receiptMetadata = receiptMetadata
         self.isFood = isFood
         self.isPet = isPet
         self.faces = faces
+        self.sharpnessScore = sharpnessScore
+        self.isBlurry = isBlurry
+        self.hasClosedEyes = hasClosedEyes
     }
 }
 
@@ -60,12 +72,15 @@ public struct VisionAnalyzer: Sendable {
             for frame in keyframes {
                 let frameResult = analyzeCGImage(frame)
                 aggregated.isReceipt = aggregated.isReceipt || frameResult.isReceipt
+                if aggregated.receiptMetadata == nil { aggregated.receiptMetadata = frameResult.receiptMetadata }
                 aggregated.isFood = aggregated.isFood || frameResult.isFood
                 aggregated.isPet = aggregated.isPet || frameResult.isPet
+                aggregated.sharpnessScore = max(aggregated.sharpnessScore, frameResult.sharpnessScore)
                 if aggregated.faces.isEmpty && !frameResult.faces.isEmpty {
                     aggregated.faces.append(contentsOf: frameResult.faces)
                 }
             }
+            aggregated.isBlurry = false // Videos are not flagged blurry from a single keyframe.
             return aggregated
         }
     }
@@ -97,19 +112,29 @@ public struct VisionAnalyzer: Sendable {
         let isPetByScene = Self.matchesKeywords(classifications: classifications, keywords: Self.petKeywords, threshold: 0.60)
         let isPet = isPetByAnimal || isPetByScene
 
-        var isReceipt = false
+        var receiptMetadata: ReceiptMetadata?
         if ReceiptDetector.shouldRunOCR(classifications: classifications) {
-            isReceipt = receiptDetector.isReceipt(cgImage: cgImage)
+            receiptMetadata = receiptDetector.detectReceipt(cgImage: cgImage)
         }
+        let isReceipt = (receiptMetadata != nil)
 
         let faceObservations = faceLandmarksRequest.results ?? []
         let faces = faceEmbedder.extractForegroundFaces(from: cgImage, observations: faceObservations)
 
+        let primaryFaceBox = faces.max(by: { $0.areaRatio < $1.areaRatio })?.boundingBox
+        let sharpnessScore = QualityAnalyzer.computeSharpness(cgImage: cgImage, focusRectNormalized: primaryFaceBox)
+        let isBlurry = !isReceipt && (sharpnessScore < QualityAnalyzer.blurThreshold)
+        let hasClosedEyes = !faces.isEmpty && faces.contains { !$0.eyesOpen }
+
         return VisionAnalysisResult(
             isReceipt: isReceipt,
+            receiptMetadata: receiptMetadata,
             isFood: isFood,
             isPet: isPet,
-            faces: faces
+            faces: faces,
+            sharpnessScore: sharpnessScore,
+            isBlurry: isBlurry,
+            hasClosedEyes: hasClosedEyes
         )
     }
 

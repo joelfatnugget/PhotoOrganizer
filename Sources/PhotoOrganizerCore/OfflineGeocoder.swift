@@ -34,6 +34,42 @@ public struct GeoEntry: Equatable, Hashable, Codable, Sendable {
     }
 }
 
+/// Offline landmark, campus, or dining venue point-of-interest entry.
+public struct GeoVenueEntry: Equatable, Hashable, Codable, Sendable {
+    public let venueName: String
+    public let category: String
+    public let city: String
+    public let country: String
+    public let sublocality: String?
+    public let latitude: Double
+    public let longitude: Double
+    public let aliases: [String]
+
+    public init(
+        venueName: String,
+        category: String,
+        city: String,
+        country: String,
+        sublocality: String? = nil,
+        latitude: Double,
+        longitude: Double,
+        aliases: [String] = []
+    ) {
+        self.venueName = venueName
+        self.category = category
+        self.city = city
+        self.country = country
+        self.sublocality = sublocality
+        self.latitude = latitude
+        self.longitude = longitude
+        self.aliases = aliases
+    }
+
+    public var coordinate: GPSCoordinate {
+        GPSCoordinate(latitude: latitude, longitude: longitude)
+    }
+}
+
 /// Fast 2D spatial K-D tree for sub-millisecond offline reverse geocoding.
 public final class KDTree2D: Sendable {
     private final class Node: Sendable {
@@ -123,16 +159,23 @@ public final class KDTree2D: Sendable {
     }
 }
 
-/// Offline K-D tree reverse geocoder with sub-locality support and +-2h indoor GPS gap-filling.
+/// Offline K-D tree reverse geocoder with sub-locality, venue POI matching, and +-2h indoor GPS gap-filling.
 public struct OfflineGeocoder: Sendable {
     private let cityTree: KDTree2D
     private let sublocalityTree: KDTree2D
+    private let allEntries: [GeoEntry]
+    private let venues: [GeoVenueEntry]
 
-    public init(entries: [GeoEntry] = OfflineGeocoder.builtInEntries) {
+    public init(
+        entries: [GeoEntry] = OfflineGeocoder.builtInEntries,
+        venues: [GeoVenueEntry] = OfflineGeocoder.builtInVenues
+    ) {
         let cities = entries.filter { !$0.isSublocality }
         let sublocalities = entries.filter { $0.isSublocality }
         self.cityTree = KDTree2D(entries: cities.isEmpty ? entries : cities)
         self.sublocalityTree = KDTree2D(entries: sublocalities)
+        self.allEntries = entries
+        self.venues = venues
     }
 
     /// Parses GeoNames TSV rows (`geonameid\tname\t...\tlat\tlon\tfeature_class\tfeature_code\tcountry_code...`) into GeoEntries.
@@ -166,11 +209,12 @@ public struct OfflineGeocoder: Sendable {
         return entries
     }
 
-    /// Resolves GPS coordinates to `City, Country` and optional `Sublocality` within `maxCityDistanceMeters`.
+    /// Resolves GPS coordinates to `City, Country`, optional `Sublocality`, and nearby offline venue within `maxVenueDistanceMeters`.
     public func resolve(
         coordinate: GPSCoordinate,
         maxCityDistanceMeters: Double = 75_000,
-        maxSublocalityDistanceMeters: Double = 4_500
+        maxSublocalityDistanceMeters: Double = 4_500,
+        maxVenueDistanceMeters: Double = 250.0
     ) -> ResolvedLocation? {
         guard let nearestCity = cityTree.nearest(to: coordinate),
               nearestCity.distanceMeters <= maxCityDistanceMeters else {
@@ -188,7 +232,74 @@ public struct OfflineGeocoder: Sendable {
             sublocality = nearestSub.entry.name
         }
 
-        return ResolvedLocation(city: city, country: country, sublocality: sublocality)
+        var matchedVenue: GeoVenueEntry?
+        var bestVenueDist = maxVenueDistanceMeters
+        for venue in venues {
+            let d = coordinate.distanceInMeters(to: venue.coordinate)
+            if d <= bestVenueDist {
+                bestVenueDist = d
+                matchedVenue = venue
+            }
+        }
+
+        return ResolvedLocation(
+            city: city,
+            country: country,
+            sublocality: sublocality ?? matchedVenue?.sublocality,
+            venueName: matchedVenue?.venueName,
+            venueCategory: matchedVenue?.category
+        )
+    }
+
+    /// Resolves a user-supplied fallback venue or city query (e.g. `"National University of Singapore"` or `"Kyoto"`) offline.
+    public func resolveFallbackQuery(_ query: String) -> (coordinate: GPSCoordinate, location: ResolvedLocation)? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+
+        func resolvedTuple(for venue: GeoVenueEntry) -> (coordinate: GPSCoordinate, location: ResolvedLocation) {
+            (
+                venue.coordinate,
+                ResolvedLocation(
+                    city: venue.city,
+                    country: venue.country,
+                    sublocality: venue.sublocality,
+                    venueName: venue.venueName,
+                    venueCategory: venue.category
+                )
+            )
+        }
+
+        // 1a. Exact match on venue name or alias first so short aliases (e.g. "NUS") aren't shadowed by substrings.
+        if let exactVenue = venues.first(where: { v in
+            v.venueName.lowercased() == lower || v.aliases.contains(where: { $0.lowercased() == lower })
+        }) {
+            return resolvedTuple(for: exactVenue)
+        }
+
+        // 1b. Substring match on venue name or aliases.
+        if let partialVenue = venues.first(where: { v in
+            v.venueName.lowercased().contains(lower)
+                || lower.contains(v.venueName.lowercased())
+                || v.aliases.contains(where: { lower.contains($0.lowercased()) })
+        }) {
+            return resolvedTuple(for: partialVenue)
+        }
+
+        // 2. Match against built-in cities & sub-localities (exact before substring).
+        let matchedEntry = allEntries.first(where: { $0.name.lowercased() == lower })
+            ?? allEntries.first(where: { lower.contains($0.name.lowercased()) })
+        if let entry = matchedEntry {
+            let coord = entry.coordinate
+            let loc = resolve(coordinate: coord) ?? ResolvedLocation(
+                city: entry.resolvedCityName,
+                country: entry.country,
+                sublocality: entry.isSublocality ? entry.name : nil
+            )
+            return (coord, loc)
+        }
+
+        return nil
     }
 
     /// Fills missing GPS coordinates for indoor photos using the closest geotagged item within +-2 hours.
@@ -346,5 +457,122 @@ public struct OfflineGeocoder: Sendable {
         GeoEntry(name: "Queenstown", country: "New Zealand", latitude: -45.0312, longitude: 168.6626),
         GeoEntry(name: "Mumbai", country: "India", latitude: 19.0760, longitude: 72.8777),
         GeoEntry(name: "Bengaluru", country: "India", latitude: 12.9716, longitude: 77.5946)
+    ]
+
+    public static let builtInVenues: [GeoVenueEntry] = [
+        // Singapore
+        GeoVenueEntry(
+            venueName: "University Cultural Centre (NUS)",
+            category: "University",
+            city: "Singapore",
+            country: "Singapore",
+            sublocality: "Kent Ridge",
+            latitude: 1.3016,
+            longitude: 103.7719,
+            aliases: ["UCC", "University Cultural Centre"]
+        ),
+        GeoVenueEntry(
+            venueName: "National University of Singapore",
+            category: "University",
+            city: "Singapore",
+            country: "Singapore",
+            sublocality: "Kent Ridge",
+            latitude: 1.2966,
+            longitude: 103.7764,
+            aliases: ["NUS", "NUS Kent Ridge"]
+        ),
+        GeoVenueEntry(
+            venueName: "Marina Bay Sands",
+            category: "Landmark",
+            city: "Singapore",
+            country: "Singapore",
+            sublocality: "Marina Bay",
+            latitude: 1.2834,
+            longitude: 103.8607,
+            aliases: ["MBS"]
+        ),
+        GeoVenueEntry(
+            venueName: "Jewel Changi Airport",
+            category: "Landmark",
+            city: "Singapore",
+            country: "Singapore",
+            sublocality: "Changi",
+            latitude: 1.3602,
+            longitude: 103.9898,
+            aliases: ["Changi Airport", "Jewel"]
+        ),
+        GeoVenueEntry(
+            venueName: "Gardens by the Bay",
+            category: "Park",
+            city: "Singapore",
+            country: "Singapore",
+            sublocality: "Marina Bay",
+            latitude: 1.2816,
+            longitude: 103.8636
+        ),
+        // Japan
+        GeoVenueEntry(
+            venueName: "Gion Corner",
+            category: "Landmark",
+            city: "Kyoto",
+            country: "Japan",
+            sublocality: "Gion",
+            latitude: 35.0037,
+            longitude: 135.7786
+        ),
+        GeoVenueEntry(
+            venueName: "Fushimi Inari Taisha",
+            category: "Landmark",
+            city: "Kyoto",
+            country: "Japan",
+            sublocality: "Fushimi",
+            latitude: 34.9671,
+            longitude: 135.7727
+        ),
+        GeoVenueEntry(
+            venueName: "Kiyomizu-dera",
+            category: "Landmark",
+            city: "Kyoto",
+            country: "Japan",
+            sublocality: "Higashiyama",
+            latitude: 34.9949,
+            longitude: 135.7850
+        ),
+        GeoVenueEntry(
+            venueName: "Ichiran Dotonbori",
+            category: "Restaurant",
+            city: "Osaka",
+            country: "Japan",
+            sublocality: "Dotonbori",
+            latitude: 34.6687,
+            longitude: 135.5013
+        ),
+        GeoVenueEntry(
+            venueName: "Tsukiji Outer Market",
+            category: "Food Market",
+            city: "Tokyo",
+            country: "Japan",
+            sublocality: "Tsukiji",
+            latitude: 35.6655,
+            longitude: 139.7707
+        ),
+        GeoVenueEntry(
+            venueName: "Shibuya Sky",
+            category: "Landmark",
+            city: "Tokyo",
+            country: "Japan",
+            sublocality: "Shibuya",
+            latitude: 35.6584,
+            longitude: 139.7022
+        ),
+        GeoVenueEntry(
+            venueName: "Senso-ji Temple",
+            category: "Landmark",
+            city: "Tokyo",
+            country: "Japan",
+            sublocality: "Asakusa",
+            latitude: 35.7148,
+            longitude: 139.7967
+        )
     ]
 }
