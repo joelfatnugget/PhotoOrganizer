@@ -1,0 +1,55 @@
+name: Release macOS Universal DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run unit and integration tests
+        run: swift test
+
+      - name: Build Universal Binary (.app + .dmg)
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          CLEAN_VERSION="${VERSION#v}"
+          VERSION="$CLEAN_VERSION" bash Scripts/package-app.sh --universal
+
+      - name: Rename DMG with version and compute SHA256
+        id: artifact
+        run: |
+          CLEAN_VERSION="${GITHUB_REF_NAME#v}"
+          cp build/PhotoOrganizer.dmg "build/PhotoOrganizer-v${CLEAN_VERSION}.dmg"
+          SHA256=$(shasum -a 256 "build/PhotoOrganizer-v${CLEAN_VERSION}.dmg" | awk '{print $1}')
+          echo "dmg_path=build/PhotoOrganizer-v${CLEAN_VERSION}.dmg" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "SHA256: $SHA256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.artifact.outputs.dmg_path }}
+            build/PhotoOrganizer.dmg
+          body: |
+            ## PhotoOrganizer ${{ github.ref_name }} (macOS Universal)
+
+            - **Requires:** macOS 13 Ventura or newer (Apple Silicon & Intel)
+            - **SHA256 (`PhotoOrganizer.dmg`):** `${{ steps.artifact.outputs.sha256 }}`
+
+            ### Install via Homebrew Tap
+            ```bash
+            brew tap ${{ github.repository_owner }}/tap
+            brew install --cask --no-quarantine photo-organizer
+            ```
