@@ -670,7 +670,7 @@ public struct HTMLReportGenerator: Sendable {
       <main>
         <section class="kpi-grid" id="kpiGrid"></section>
 
-        <section class="panel">
+        <section class="panel" id="mapPanel">
           <div class="panel-header">
             <span class="panel-title">Location & Venue Map</span>
             <span id="mapStatus" style="font-size:12px;color:var(--text-muted);"></span>
@@ -862,12 +862,13 @@ public struct HTMLReportGenerator: Sendable {
 
           let map = null;
           let markerLayer = null;
-          if (typeof L !== 'undefined') {
+          if (data.kpi.geotaggedCount === 0) {
+            document.getElementById('mapPanel').style.display = 'none';
+          } else if (typeof L !== 'undefined') {
             map = L.map('map');
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-              attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
-              subdomains: 'abcd',
-              maxZoom: 20
+            L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+              attribution: 'Tiles &copy; Esri',
+              maxZoom: 19
             }).addTo(map);
             markerLayer = L.layerGroup().addTo(map);
           } else {
